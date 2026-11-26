@@ -1,0 +1,100 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt · clippy · test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      # The default lists, really downloaded and compiled, against real trackers.
+      - run: cargo test --release --test real_lists -- --ignored --nocapture
+
+  invariants:
+    name: project invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No telemetry (madde 36)
+        run: |
+          if grep -rIn -iE 'telemetry|analytics|sentry|mixpanel|posthog' src Cargo.toml | grep -viE 'google.analytics|no telemetry|never collects|madde 36'; then
+            echo "::error::telemetry-shaped code found (madde 36)"
+            exit 1
+          fi
+      - name: No GUI and no engine in the core (madde 50c)
+        run: |
+          if grep -nE '^\s*(tauri|wry|tao|winit|gtk|egui|iced|slint|druid|servo|webview2|cef)\b' Cargo.toml; then
+            echo "::error::the core takes no GUI and no engine dependency"
+            exit 1
+          fi
+      - name: A library, not a service
+        run: |
+          if grep -nE '^\[\[bin\]\]' Cargo.toml || [ -e src/main.rs ]; then
+            echo "::error::eon-browser-core has no binary target"
+            exit 1
+          fi
+          if grep -rnE 'TcpListener|TcpStream|UdpSocket|UnixListener|std::net::' src | grep -v 'std::net::IpAddr'; then
+            echo "::error::eon-browser-core opens no socket (madde 50c)"
+            exit 1
+          fi
+      - name: No affiliate, no AI (madde 50d)
+        run: |
+          if grep -rnE -i 'affiliate_tag|add_affiliate|openai|anthropic|gemini|copilot|llm' src | grep -viE 'neither added nor removed|affiliate tags'; then
+            echo "::error::madde 50d forbids this"
+            exit 1
+          fi
+
+  deny:
+    name: licences · advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check all
+
+  reuse:
+    name: licence headers (REUSE)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fsfe/reuse-action@v5
+
+  dco:
+    name: signed-off commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Every commit must carry Signed-off-by
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          missing=0
+          while read -r sha; do
+            if ! git log -1 --format=%B "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::missing Signed-off-by: $(git log -1 --oneline "$sha")"
+              missing=1
+            fi
+          done < <(git rev-list "$base..$head")
+          exit $missing

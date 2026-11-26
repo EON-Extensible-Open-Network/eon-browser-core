@@ -1,0 +1,17 @@
+EON Browser core
+Copyright (c) 2026 EON contributors
+
+This product is licensed under GPL-3.0-or-later WITH the EON Module ABI
+Exception 1.0 (see LICENSE and LICENSE-EXCEPTION.md).
+
+Third-party components (direct dependencies; full inventory: cargo deny check licenses)
+
+  adblock                  MPL-2.0 (Brave Software; combined as a Larger Work)
+  url                      MIT OR Apache-2.0
+  psl                      MIT OR Apache-2.0 (with the Public Suffix List, MPL-2.0 data)
+  rusqlite (with SQLite)   MIT (SQLite: public domain)
+  sha2                     MIT OR Apache-2.0
+  serde, serde_json        MIT OR Apache-2.0
+
+Filter lists are not part of this library. Their publishers and licences are listed
+in src/lists.rs and shown to the person in the application.
