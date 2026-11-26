@@ -28,13 +28,25 @@ fn curl(url: &str) -> Result<Vec<u8>, String> {
     let mut last = String::new();
     for _ in 0..3 {
         let out = Command::new("curl")
-            .args(["-sSfL", "--retry", "2", "--max-time", "60", "--compressed", url])
+            .args([
+                "-sSfL",
+                "--retry",
+                "2",
+                "--max-time",
+                "60",
+                "--compressed",
+                url,
+            ])
             .output()
             .map_err(|e| e.to_string())?;
         if out.status.success() && !out.stdout.is_empty() {
             return Ok(out.stdout);
         }
-        last = format!("{}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
+        last = format!(
+            "{}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
         std::thread::sleep(Duration::from_secs(3));
     }
     Err(last)
