@@ -17,7 +17,7 @@ publish = false
 # Brave's filter engine: Adblock Plus and uBlock Origin syntax, network and cosmetic
 # rules, a compiled form that loads fast. MPL-2.0, no file marked "Incompatible With
 # Secondary Licenses", so it combines with GPL-3.0 as a Larger Work (MPL-2.0 §3.3).
-# `single-thread` is off: the app checks requests from Servo's network threads.
+# `single-thread` is off so a compiled shield is `Send`: it can be built off the main thread.
 adblock = { version = "0.13.6", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
 # URLs as the WHATWG standard parses them -- the same parser Servo uses.
 url = "2.5.9"
@@ -25,7 +25,9 @@ url = "2.5.9"
 # decides per-site settings and what an address-bar entry is.
 psl = "2.1.264"
 # History, bookmarks, sessions, site settings: one file per profile, full-text search.
-rusqlite = { version = "0.43", features = ["bundled"] }
+# The version Servo itself uses: two copies of SQLite cannot link into one program, and
+# one copy keeps the browser smaller.
+rusqlite = { version = "0.38", features = ["bundled"] }
 # Verifying and recording what a fetched list was.
 sha2 = "0.10"
 serde = { version = "1.0.229", features = ["derive"] }
