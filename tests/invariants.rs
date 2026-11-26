@@ -12,14 +12,10 @@ fn the_core_has_no_network_client() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
         .args([
-            "tree",
-            "-e",
-            "normal",
-            "--prefix",
-            "none",
-            "--target",
+            "tree", "-e", "normal", "--prefix", "none", "--target",
+            // Every platform's dependencies, also ones never built here (wasm's sqlite VFS):
+            // cargo may have to download their manifests, so this is not `--offline`.
             "all",
-            "--offline",
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output();
