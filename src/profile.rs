@@ -156,7 +156,21 @@ CREATE TABLE IF NOT EXISTS session (
     state TEXT NOT NULL,
     saved INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS extension_storage (
+    extension TEXT NOT NULL,
+    area TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (extension, area, key)
+);
 ";
+
+/// The storage areas an extension may use (`chrome.storage.<area>`). `session` is kept in
+/// memory by the application and never reaches this table.
+pub const STORAGE_AREAS: [&str; 2] = ["local", "sync"];
+
+/// Most an extension may keep in one area: Chrome's `storage.local` quota.
+pub const STORAGE_QUOTA_BYTES: usize = 10 * 1024 * 1024;
 
 /// A person's profile.
 #[derive(Debug)]
@@ -433,6 +447,99 @@ impl Profile {
         Ok(out)
     }
 
+    // ---------------------------------------------------------------- extension storage
+
+    /// `chrome.storage.<area>.get`: the values stored under `keys` (all when `None`), as
+    /// JSON text by key.
+    pub fn ext_storage_get(
+        &self,
+        extension: &str,
+        area: &str,
+        keys: Option<&[String]>,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut stmt = self.db.prepare(
+            "SELECT key, value FROM extension_storage WHERE extension = ?1 AND area = ?2",
+        )?;
+        let rows = stmt.query_map(params![extension, area], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (k, v) = row?;
+            if keys.is_none_or(|ks| ks.contains(&k)) {
+                out.insert(k, v);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `chrome.storage.<area>.set`: each value is JSON text. Refused as a whole if the
+    /// area would grow past [`STORAGE_QUOTA_BYTES`].
+    pub fn ext_storage_set(
+        &self,
+        extension: &str,
+        area: &str,
+        items: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        let mut size: usize = self
+            .ext_storage_get(extension, area, None)?
+            .iter()
+            .filter(|(k, _)| !items.contains_key(*k))
+            .map(|(k, v)| k.len() + v.len())
+            .sum();
+        size += items.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
+        if size > STORAGE_QUOTA_BYTES {
+            return Err(crate::Error::BadUrl(format!(
+                "storage quota exceeded for {extension} ({size} bytes)"
+            )));
+        }
+        let tx = self.db.unchecked_transaction()?;
+        for (k, v) in items {
+            tx.execute(
+                "INSERT INTO extension_storage(extension, area, key, value) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(extension, area, key) DO UPDATE SET value = ?4",
+                params![extension, area, k, v],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `chrome.storage.<area>.remove`, or `clear` when `keys` is `None`.
+    pub fn ext_storage_remove(
+        &self,
+        extension: &str,
+        area: &str,
+        keys: Option<&[String]>,
+    ) -> Result<()> {
+        match keys {
+            None => {
+                self.db.execute(
+                    "DELETE FROM extension_storage WHERE extension = ?1 AND area = ?2",
+                    params![extension, area],
+                )?;
+            }
+            Some(ks) => {
+                for k in ks {
+                    self.db.execute(
+                        "DELETE FROM extension_storage WHERE extension = ?1 AND area = ?2 AND key = ?3",
+                        params![extension, area, k],
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything an extension stored, gone (when it is removed).
+    pub fn ext_storage_forget(&self, extension: &str) -> Result<()> {
+        self.db.execute(
+            "DELETE FROM extension_storage WHERE extension = ?1",
+            params![extension],
+        )?;
+        Ok(())
+    }
+
     // ---------------------------------------------------------------- session
 
     pub fn save_session(&self, session: &Session, at: u64) -> Result<()> {
@@ -615,6 +722,52 @@ mod tests {
         assert_eq!(p.changed_sites()?.len(), 1);
         p.set_site(&page, &SiteSettings::default())?;
         assert!(p.changed_sites()?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn extension_storage_by_extension_and_area() -> Result<()> {
+        let p = p();
+        let set = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        };
+        p.ext_storage_set(
+            "dark-reader",
+            "local",
+            &set(&[("enabled", "true"), ("theme", "{\"mode\":1}")]),
+        )?;
+        p.ext_storage_set("dark-reader", "sync", &set(&[("enabled", "false")]))?;
+        p.ext_storage_set("other", "local", &set(&[("enabled", "\"x\"")]))?;
+        let all = p.ext_storage_get("dark-reader", "local", None)?;
+        assert_eq!(all.len(), 2);
+        assert_eq!(all["theme"], "{\"mode\":1}");
+        let one = p.ext_storage_get("dark-reader", "local", Some(&["enabled".to_string()]))?;
+        assert_eq!(one.len(), 1);
+        assert_eq!(
+            p.ext_storage_get("dark-reader", "sync", None)?["enabled"],
+            "false"
+        );
+        p.ext_storage_set("dark-reader", "local", &set(&[("enabled", "false")]))?;
+        assert_eq!(
+            p.ext_storage_get("dark-reader", "local", None)?["enabled"],
+            "false"
+        );
+        p.ext_storage_remove("dark-reader", "local", Some(&["theme".to_string()]))?;
+        assert_eq!(p.ext_storage_get("dark-reader", "local", None)?.len(), 1);
+        let big = "x".repeat(STORAGE_QUOTA_BYTES);
+        assert!(p
+            .ext_storage_set("dark-reader", "local", &set(&[("big", big.as_str())]))
+            .is_err());
+        p.ext_storage_forget("dark-reader")?;
+        assert!(p.ext_storage_get("dark-reader", "sync", None)?.is_empty());
+        assert_eq!(
+            p.ext_storage_get("other", "local", None)?.len(),
+            1,
+            "other extensions keep theirs"
+        );
         Ok(())
     }
 
