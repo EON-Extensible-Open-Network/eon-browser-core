@@ -30,6 +30,8 @@ psl = "2.1.264"
 rusqlite = { version = "0.38", features = ["bundled"] }
 # Verifying and recording what a fetched list was.
 sha2 = "0.10"
+# Extension packages (Chrome's CRX3 and Firefox's XPI are zips). Read only, deflate only.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 

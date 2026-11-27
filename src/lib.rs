@@ -13,12 +13,15 @@
 //! - [`profile`] — history with full-text search, bookmarks, the session, per-site settings.
 //! - [`fingerprint`] — the user agent and the page-start script.
 //! - [`site`] — which site an address belongs to.
+//! - [`extension`] — other browsers' extensions: packages, manifests, permissions in
+//!   words, match patterns, and `declarativeNetRequest` rules into the shield.
 //!
 //! The core has no engine, no window and **no network access of its own**; the application
 //! fetches and the core decides. It never collects anything about the person (madde 36).
 
 pub mod clean;
 mod error;
+pub mod extension;
 pub mod fingerprint;
 pub mod lists;
 pub mod omnibox;

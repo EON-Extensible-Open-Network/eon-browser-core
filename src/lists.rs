@@ -405,6 +405,50 @@ impl Lists {
         write_atomic(&self.dir.join(CUSTOM_FILE), text.as_bytes())
     }
 
+    /// Store the blocking rules of an installed extension (its `declarativeNetRequest`
+    /// rules, translated). They run in the same engine as the lists.
+    pub fn set_extension_rules(&mut self, extension: &str, lines: &[String]) -> Result<()> {
+        let dir = self.dir.join("extensions");
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(format!("{}.txt", safe_name(extension))),
+            lines.join("\n").as_bytes(),
+        )
+    }
+
+    /// Remove an extension's rules (when it is turned off or removed).
+    pub fn remove_extension_rules(&mut self, extension: &str) -> Result<()> {
+        let path = self
+            .dir
+            .join("extensions")
+            .join(format!("{}.txt", safe_name(extension)));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
+    /// Every installed extension's rules, by extension, in a stable order.
+    pub fn extension_rules(&self) -> Result<Vec<(String, String)>> {
+        let dir = self.dir.join("extensions");
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for e in fs::read_dir(dir)?.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("txt") {
+                let id = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                out.push((id, fs::read_to_string(&p)?));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// A digest of everything a compiled shield is built from: which lists are on, the
     /// exact copy of each, and the custom rules. A cached engine is valid only while this
     /// is unchanged.
@@ -421,6 +465,10 @@ impl Lists {
             }
         }
         h.update(self.custom_rules()?.as_bytes());
+        for (id, text) in self.extension_rules()? {
+            h.update(id.as_bytes());
+            h.update(text.as_bytes());
+        }
         Ok(hex(&h.finalize()))
     }
 
@@ -472,6 +520,21 @@ fn check<'a>(info: &ListInfo, bytes: &'a [u8]) -> Result<&'a str> {
     Ok(text)
 }
 
+/// An extension id as a file name: letters, digits, `-`, `_`, `.`, `@` only.
+fn safe_name(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.@".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_start_matches('.')
+        .to_string()
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, bytes)?;
@@ -499,5 +562,10 @@ pub(crate) fn enabled_texts(lists: &Lists) -> Result<(Vec<(&'static ListInfo, St
             }
         }
     }
-    Ok((out, lists.custom_rules()?))
+    let mut custom = lists.custom_rules()?;
+    for (_, text) in lists.extension_rules()? {
+        custom.push('\n');
+        custom.push_str(&text);
+    }
+    Ok((out, custom))
 }

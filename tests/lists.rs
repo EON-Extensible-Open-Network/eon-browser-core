@@ -224,3 +224,36 @@ fn compiled_shield_is_cached_and_invalidated() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn an_extensions_declarative_rules_block_alongside_the_lists() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut lists = Lists::load(dir.path())?;
+    lists.seed("easylist", &list("EasyList", &["||ads.example^"]), 1)?;
+    let rules = r#"[{"id":1,"action":{"type":"block"},"condition":{"urlFilter":"||ext-blocked.example^","resourceTypes":["script"]}}]"#;
+    let t = eon_browser_core::extension::dnr::translate(rules)
+        .map_err(eon_browser_core::Error::BadUrl)?;
+    lists.set_extension_rules("ublock-lite@example", &t.lines)?;
+    let page = "https://site.org/";
+    let s = Shield::build(&lists)?;
+    let blocked = |s: &Shield, url: &str| {
+        matches!(
+            s.check(&Request {
+                url,
+                source: page,
+                kind: Kind::Script
+            }),
+            Verdict::Block { .. }
+        )
+    };
+    assert!(blocked(&s, "https://ext-blocked.example/x.js"));
+    assert!(blocked(&s, "https://ads.example/x.js"));
+    let before = lists.digest()?;
+    lists.remove_extension_rules("ublock-lite@example")?;
+    assert_ne!(before, lists.digest()?, "a cached shield is rebuilt");
+    assert!(!blocked(
+        &Shield::build(&lists)?,
+        "https://ext-blocked.example/x.js"
+    ));
+    Ok(())
+}
