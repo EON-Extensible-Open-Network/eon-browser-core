@@ -43,6 +43,12 @@ pub struct Condition {
     pub excluded_resource_types: Vec<String>,
     /// `firstParty` or `thirdParty`.
     pub domain_type: Option<String>,
+    /// Every condition this translator does not know (`requestMethods`,
+    /// `responseHeaders`, `tabIds`…). A rule carrying one is skipped, never translated
+    /// without it: dropping a condition would widen the rule (uBlock Origin Lite has
+    /// "block only POST" rules that would otherwise block every request).
+    #[serde(flatten)]
+    pub other: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// The result of translating a rule file.
@@ -79,6 +85,9 @@ fn translate_rule(rule: &Rule) -> Result<Option<Vec<String>>, String> {
         other => return Err(format!("action `{other}` is not translated yet")),
     };
     let c = &rule.condition;
+    if let Some(k) = c.other.keys().next() {
+        return Err(format!("condition `{k}` is not translated yet"));
+    }
     let mut options: Vec<String> = Vec::new();
 
     // Resource types, always as a positive list. DNR's default is "every type except the
@@ -241,7 +250,9 @@ mod tests {
       { "id": 5, "action": { "type": "upgradeScheme" }, "condition": { "requestDomains": ["x.example"] } },
       { "id": 6, "action": { "type": "redirect", "redirect": { "url": "https://x" } },
         "condition": { "urlFilter": "||y.example^" } },
-      { "id": 7, "action": { "type": "block" }, "condition": { "regexFilter": "^https://cdn\\.example/ad[0-9]+\\.js" } }
+      { "id": 7, "action": { "type": "block" }, "condition": { "regexFilter": "^https://cdn\\.example/ad[0-9]+\\.js" } },
+      { "id": 8, "action": { "type": "block" },
+        "condition": { "urlFilter": "||news.example^", "requestMethods": ["post"] } }
     ]"#;
 
     #[test]
@@ -264,8 +275,15 @@ mod tests {
             t.already_done, 1,
             "upgradeScheme: the browser is HTTPS-only"
         );
-        assert_eq!(t.skipped.len(), 1);
+        assert_eq!(t.skipped.len(), 2);
         assert_eq!(t.skipped[0].0, 6);
+        // "Block only POST" must never become "block everything on news.example".
+        assert_eq!(t.skipped[1].0, 8);
+        assert!(
+            t.skipped[1].1.contains("requestMethods"),
+            "{:?}",
+            t.skipped[1]
+        );
     }
 
     #[test]
